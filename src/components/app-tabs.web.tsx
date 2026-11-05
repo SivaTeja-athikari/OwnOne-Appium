@@ -1,115 +1,129 @@
+import type { ComponentProps } from "react";
 import {
   Tabs,
   TabList,
   TabTrigger,
   TabSlot,
-  TabTriggerSlotProps,
-  TabListProps,
-} from 'expo-router/ui';
-import { SymbolView } from 'expo-symbols';
-import { Pressable, useColorScheme, View, StyleSheet } from 'react-native';
-
-import { Colors, MaxContentWidth, Spacing } from '@/constants/theme';
-
-import { ExternalLink } from './external-link';
-import { ThemedText } from './themed-text';
-import { ThemedView } from './themed-view';
+  type TabTriggerSlotProps,
+} from "expo-router/ui";
+import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Brand, AppIcon, type AppIconName } from "@/components/ui/workspace-ui";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useTheme } from "@/hooks/use-theme";
 
 export default function AppTabs() {
+  const theme = useTheme();
+  const insets = useSafeAreaInsets();
   return (
-    <Tabs>
-      <TabSlot style={{ height: '100%' }} />
-      <TabList asChild>
-        <CustomTabList>
-          <TabTrigger name="home" href="/" asChild>
-            <TabButton>Home</TabButton>
-          </TabTrigger>
-          <TabTrigger name="explore" href="/explore" asChild>
-            <TabButton>Explore</TabButton>
-          </TabTrigger>
-        </CustomTabList>
+    <Tabs style={{ flex: 1, backgroundColor: theme.background }}>
+      <View
+        style={[
+          styles.header,
+          { backgroundColor: theme.surface, borderColor: theme.border },
+        ]}
+      >
+        <View style={styles.inner}>
+          <Brand compact />
+          <Text style={{ fontSize: 11, color: theme.textSecondary }}>
+            Your work, connected.
+          </Text>
+        </View>
+      </View>
+      <TabSlot style={{ flex: 1, minHeight: 0 }} />
+      <TabList
+        style={[
+          styles.bottom,
+          {
+            backgroundColor: theme.surface,
+            borderColor: theme.border,
+            paddingBottom: Math.max(insets.bottom, 10),
+          },
+        ]}
+      >
+        <TabTrigger name="overview" href="/" asChild>
+          <TabButton icon="document" testID="tab_overview">
+            Reports
+          </TabButton>
+        </TabTrigger>
+        <TabTrigger name="account" href="/account" asChild>
+          <TabButton icon="person" testID="tab_account">
+            Account
+          </TabButton>
+        </TabTrigger>
       </TabList>
     </Tabs>
   );
 }
-
-export function TabButton({ children, isFocused, ...props }: TabTriggerSlotProps) {
+function TabButton({
+  children,
+  isFocused,
+  icon,
+  ...props
+}: Omit<TabTriggerSlotProps, "ref"> & {
+  icon: AppIconName;
+  ref?: ComponentProps<typeof Pressable>["ref"];
+}) {
+  const theme = useTheme();
   return (
-    <Pressable {...props} style={({ pressed }) => pressed && styles.pressed}>
-      <ThemedView
-        type={isFocused ? 'backgroundSelected' : 'backgroundElement'}
-        style={styles.tabButtonView}>
-        <ThemedText type="small" themeColor={isFocused ? 'text' : 'textSecondary'}>
-          {children}
-        </ThemedText>
-      </ThemedView>
+    <Pressable
+      {...props}
+      accessibilityRole="tab"
+      accessibilityState={{ selected: isFocused }}
+      style={({ pressed }) => [styles.tab, pressed && { opacity: 0.65 }]}
+    >
+      <View
+        style={[
+          styles.icon,
+          {
+            backgroundColor: isFocused
+              ? theme.backgroundSelected
+              : "transparent",
+          },
+        ]}
+      >
+        <AppIcon
+          name={icon}
+          size={22}
+          color={isFocused ? theme.accent : theme.textSecondary}
+        />
+      </View>
+      <Text
+        style={{
+          color: isFocused ? theme.accent : theme.textSecondary,
+          fontSize: 11,
+          fontWeight: isFocused ? "700" : "500",
+        }}
+      >
+        {children}
+      </Text>
     </Pressable>
   );
 }
-
-export function CustomTabList(props: TabListProps) {
-  const scheme = useColorScheme();
-  const colors = Colors[scheme === 'dark' ? 'dark' : 'light'];
-
-  return (
-    <View {...props} style={styles.tabListContainer}>
-      <ThemedView type="backgroundElement" style={styles.innerContainer}>
-        <ThemedText type="smallBold" style={styles.brandText}>
-          Expo Starter
-        </ThemedText>
-
-        {props.children}
-
-        <ExternalLink href="https://docs.expo.dev" asChild>
-          <Pressable style={styles.externalPressable}>
-            <ThemedText type="link">Docs</ThemedText>
-            <SymbolView
-              tintColor={colors.text}
-              name={{ ios: 'arrow.up.right.square', web: 'link' }}
-              size={12}
-            />
-          </Pressable>
-        </ExternalLink>
-      </ThemedView>
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
-  tabListContainer: {
-    position: 'absolute',
-    width: '100%',
-    padding: Spacing.three,
-    justifyContent: 'center',
-    alignItems: 'center',
-    flexDirection: 'row',
+  header: { borderBottomWidth: 1, paddingHorizontal: 24, paddingVertical: 12 },
+  inner: {
+    width: "100%",
+    maxWidth: 1072,
+    alignSelf: "center",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
   },
-  innerContainer: {
-    paddingVertical: Spacing.two,
-    paddingHorizontal: Spacing.five,
-    borderRadius: Spacing.five,
-    flexDirection: 'row',
-    alignItems: 'center',
-    flexGrow: 1,
-    gap: Spacing.two,
-    maxWidth: MaxContentWidth,
+  bottom: {
+    width: "100%",
+    flexDirection: "row",
+    justifyContent: "center",
+    borderTopWidth: 1,
+    paddingTop: 8,
+    paddingBottom: 10,
   },
-  brandText: {
-    marginRight: 'auto',
-  },
-  pressed: {
-    opacity: 0.7,
-  },
-  tabButtonView: {
-    paddingVertical: Spacing.one,
-    paddingHorizontal: Spacing.three,
-    borderRadius: Spacing.three,
-  },
-  externalPressable: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: Spacing.one,
-    marginLeft: Spacing.three,
+  tab: { minHeight: 54, flex: 1, maxWidth: 180, alignItems: "center", gap: 4 },
+  icon: {
+    width: 60,
+    height: 30,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 18,
   },
 });
