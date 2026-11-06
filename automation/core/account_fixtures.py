@@ -10,8 +10,11 @@ from automation.offline.test_data import fresh_email
 
 
 def offline_account_scope(fixture_name, config):
-    # Each test receives an isolated account when running on a farm worker.
-    return 'session' if config.getoption('--reuse-app-session') and not config.getoption('--farm-worker') else 'function'
+    # Regression farm batches run one test module in one process, allowing the
+    # module's related cases to reuse a single authenticated test account.
+    farm_reuse = config.getoption('--farm-reuse-session')
+    single_reuse = config.getoption('--reuse-app-session') and not config.getoption('--farm-worker')
+    return 'session' if farm_reuse or single_reuse else 'function'
 
 
 def require_online_precondition(driver):

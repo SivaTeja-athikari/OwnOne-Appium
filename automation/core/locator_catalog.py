@@ -226,6 +226,24 @@ CATALOG_DEFINITIONS: List[SemanticDescriptor] = [
         ios_classes=["XCUIElementTypeTextField"],
     ),
     SemanticDescriptor(
+        test_id="report_category_dropdown",
+        role="button",
+        labels=["report_category_dropdown", "Report type", "Choose report type"],
+        texts=["Report type", "Choose report type", "Site visit", "Delivery", "Maintenance", "Incident"],
+        neighbor_texts=["What kind of work are you recording?", "Report type"],
+        android_classes=["android.view.ViewGroup", "android.widget.Button", "android.view.View"],
+        ios_classes=["XCUIElementTypeButton", "XCUIElementTypeOther"],
+    ),
+    SemanticDescriptor(
+        test_id="report_priority_dropdown",
+        role="button",
+        labels=["report_priority_dropdown", "Priority", "Choose priority"],
+        texts=["Priority", "Choose priority", "Normal", "High", "Urgent"],
+        neighbor_texts=["How quickly does this need attention?", "Priority"],
+        android_classes=["android.view.ViewGroup", "android.widget.Button", "android.view.View"],
+        ios_classes=["XCUIElementTypeButton", "XCUIElementTypeOther"],
+    ),
+    SemanticDescriptor(
         test_id="report_details_input",
         role="input",
         labels=["What happened? *", "report_details_input", "Details"],
@@ -395,6 +413,30 @@ class LocatorCatalog:
                 role="tab",
                 texts=[section_name],
                 labels=[test_id, section_name],
+                android_classes=["android.view.ViewGroup", "android.widget.TextView"],
+                ios_classes=["XCUIElementTypeButton", "XCUIElementTypeOther"],
+            )
+
+        # E.g. 'report_category_option_Delivery' -> role: button, text: 'Delivery'
+        if test_id.startswith("report_category_option_"):
+            val = test_id.replace("report_category_option_", "").replace("_", " ")
+            return SemanticDescriptor(
+                test_id=test_id,
+                role="button",
+                texts=[val],
+                labels=[test_id, val],
+                android_classes=["android.view.ViewGroup", "android.widget.TextView"],
+                ios_classes=["XCUIElementTypeButton", "XCUIElementTypeOther"],
+            )
+
+        # E.g. 'report_priority_option_High' -> role: button, text: 'High'
+        if test_id.startswith("report_priority_option_"):
+            val = test_id.replace("report_priority_option_", "").replace("_", " ")
+            return SemanticDescriptor(
+                test_id=test_id,
+                role="button",
+                texts=[val],
+                labels=[test_id, val],
                 android_classes=["android.view.ViewGroup", "android.widget.TextView"],
                 ios_classes=["XCUIElementTypeButton", "XCUIElementTypeOther"],
             )

@@ -45,10 +45,34 @@ command(python, [...common, ...selection, '--collect-only', '-q', `--farm-collec
 const cases = JSON.parse(readFileSync(resolve(resultDir, 'collection.json'), 'utf8'));
 const jobs = schedule(cases, devices.length, values.mode, values['group-by'])
   .map((job, index) => ({ ...job, device: devices[index], index }))
-  .filter((job) => job.cases.length); // Never spawn pytest without explicit node IDs.
-write('plan.json', { runId, platform, environment, suite: values.suite, mode: values.mode, grouping: values['group-by'], cases: cases.length, jobs });
-console.log(`[farm] ${values.mode}: ${cases.length} cases, ${jobs.length}/${devices.length} active devices; ${resultDir}`);
-for (const job of jobs) console.log(`[farm] ${job.device.id}: ${job.cases.length} cases; estimated test work ${job.estimatedSeconds}s (not a measured runtime)`);
+  .filter((job) => job.cases.length);
+const dynamic = values.mode === 'shard';
+// Only the focused regression flows are organized around one shared account
+// per module. The broad suite includes independent scenarios, so preserve its
+// existing per-test session/account isolation.
+const reuseSessions = dynamic && values.suite === 'regression';
+const grouped = new Map();
+if (dynamic) {
+  for (const item of cases) {
+    const key = item.nodeid.split('::')[0];
+    const group = grouped.get(key) || { key, cases: [] };
+    group.cases.push(item);
+    grouped.set(key, group);
+  }
+}
+const workUnits = dynamic
+  ? [...grouped.values()].map((unit, index) => ({ ...unit, index,
+    estimatedSeconds: schedule(unit.cases, 1, 'shard', 'case')[0].estimatedSeconds }))
+    .sort((a, b) => b.estimatedSeconds - a.estimatedSeconds)
+  : [];
+const workers = devices.slice(0, dynamic ? Math.min(devices.length, workUnits.length) : jobs.length)
+  .map((device, index) => ({ device, index, cases: dynamic ? [] : jobs[index].cases,
+    estimatedSeconds: dynamic ? 0 : jobs[index].estimatedSeconds }));
+write('plan.json', { runId, platform, environment, suite: values.suite, mode: values.mode,
+  grouping: dynamic ? 'module' : values['group-by'], scheduling: dynamic ? 'dynamic-module-queue' : 'replicate',
+  reuseSessions, cases: cases.length, workUnits: dynamic ? workUnits : undefined, jobs: workers });
+console.log(`[farm] ${values.mode}: ${cases.length} cases, ${workers.length}/${devices.length} active devices; ${resultDir}`);
+for (const worker of workers) console.log(`[farm] ${worker.device.id}: ${dynamic ? 'will claim module groups dynamically' : `${worker.cases.length} cases; estimated test work ${worker.estimatedSeconds}s (not a measured runtime)`}`);
 if (values['dry-run']) process.exit(0);
 if (env.USE_MOCK_DRIVER === '1') throw new Error('Farm runs cannot use a mock driver');
 if (cases.some((item) => item.account) && env.OFFLINE_FIREBASE_CONFIGURED !== '1') throw new Error('Selected tests require OFFLINE_FIREBASE_CONFIGURED=1');
@@ -112,7 +136,7 @@ try {
   }
   const forwardedPorts = new Set(platform === 'android' ? command('adb', ['forward', '--list'], env).split(/\s+/).filter((s) => /^tcp:\d+$/.test(s)).map((s) => Number(s.slice(4))) : []);
   const booted = platform === 'ios' ? JSON.parse(command('xcrun', ['simctl', 'list', 'devices', 'booted', '-j'], env)).devices : {};
-  for (const job of jobs) {
+  for (const job of workers) {
     if (cancelled) throw new Error('Cancelled during preflight');
     const { device } = job;
     releases.push(lease(locks, `device:${platform}:${device.id}`, owner));
@@ -137,7 +161,7 @@ try {
       job.actualVersion = entry[0].split('.iOS-')[1]?.replaceAll('-', '.');
       if (!job.actualVersion || (device.version && job.actualVersion !== device.version)) throw new Error(`Simulator OS mismatch: ${device.id}`);
       command('xcrun', ['simctl', 'get_app_container', device.id, 'com.anonymous.appreact', 'app'], env);
-      if (job.cases.some((item) => item.network)) {
+      if (cases.some((item) => item.network)) {
         const config = proxies[device.id] || proxies[device.id.toLowerCase()];
         if (!config?.apiUrl || !config.name || config.verified !== true) throw new Error(`iOS offline worker ${device.id} needs a dedicated verified FARM_IOS_PROXIES entry; host Wi-Fi control is forbidden`);
         const proxyUrl = new URL(config.apiUrl).href.replace(/\/$/, '');
@@ -155,14 +179,20 @@ try {
     job.mjpegPort = mjpeg.port;
   }
   // All devices must pass preflight before any worker can mutate app/network state.
-  write('plan.json', { runId, platform, environment, suite: values.suite, mode: values.mode, grouping: values['group-by'], jobs });
-  results = await Promise.all(jobs.map((job) => new Promise((done) => {
-    if (cancelled) return done({ device: job.device.id, passed: false, cancelled: true });
-    const assignment = resolve(job.directory, 'assignment.json');
-    writeFileSync(assignment, JSON.stringify(job.cases.map((item) => item.nodeid)));
+  write('plan.json', { runId, platform, environment, suite: values.suite, mode: values.mode,
+    grouping: dynamic ? 'module' : values['group-by'], scheduling: dynamic ? 'dynamic-module-queue' : 'replicate',
+    reuseSessions, cases: cases.length, workUnits: dynamic ? workUnits : undefined, jobs: workers });
+  const pending = dynamic ? [...workUnits] : [];
+  const completed = [];
+  const runBatch = (job, batch, batchIndex) => new Promise((done) => {
+    if (cancelled) return done({ device: job.device.id, nodeids: batch.map((item) => item.nodeid), passed: false, cancelled: true });
+    const batchDir = resolve(job.directory, `batch-${batchIndex + 1}`);
+    mkdirSync(batchDir, { recursive: true });
+    const assignment = resolve(batchDir, 'assignment.json');
+    writeFileSync(assignment, JSON.stringify(batch.map((item) => item.nodeid)));
     const proxy = proxyStates.get(job.device.id)?.config;
     const workerEnv = {
-      ...env, FARM_WORKER_ID: job.device.id, FARM_ARTIFACT_ROOT: job.directory,
+      ...env, FARM_WORKER_ID: job.device.id, FARM_ARTIFACT_ROOT: batchDir,
       FARM_PLATFORM: platform, APPIUM_MJPEG_PORT: String(job.mjpegPort),
       ...(platform === 'android' ? {
         ANDROID_UDID: job.device.id, ANDROID_PLATFORM_VERSION: job.actualVersion,
@@ -170,15 +200,16 @@ try {
       } : {
         IOS_UDID: job.device.id, IOS_PLATFORM_VERSION: job.actualVersion,
         IOS_DEVICE_NAME: job.device.name || 'iPhone', ANDROID_UDID: '',
-        APPIUM_WDA_PORT: String(job.driverPort), APPIUM_DERIVED_DATA_PATH: resolve(job.directory, 'wda'),
+        APPIUM_WDA_PORT: String(job.driverPort), APPIUM_DERIVED_DATA_PATH: resolve(batchDir, 'wda'),
         OFFLINE_PROXY_API_URL: proxy?.apiUrl || '', OFFLINE_PROXY_NAME: proxy?.name || '',
         OFFLINE_PROXY_VERIFIED: proxy ? '1' : '0',
       }),
     };
-    const args = [...common, '--real', '--farm-worker', '--appium-url', baseUrl,
-      `--farm-assignment-file=${assignment}`, `--farm-results-file=${resolve(job.directory, 'results.json')}`,
-      `--junitxml=${resolve(job.directory, 'junit.xml')}`, `--alluredir=${resolve(job.directory, 'allure-results')}`,
-      ...job.cases.map((item) => `automation/${item.nodeid}`)];
+    const args = [...common, '--real', '--farm-worker', ...(reuseSessions ? ['--farm-reuse-session'] : []),
+      '--appium-url', baseUrl,
+      `--farm-assignment-file=${assignment}`, `--farm-results-file=${resolve(batchDir, 'results.json')}`,
+      `--junitxml=${resolve(batchDir, 'junit.xml')}`, `--alluredir=${resolve(batchDir, 'allure-results')}`,
+      ...batch.map((item) => `automation/${item.nodeid}`)];
     const begin = Date.now();
     const child = spawn(python, args, { cwd: root, env: workerEnv, stdio: 'inherit' });
     children.add(child);
@@ -197,13 +228,49 @@ try {
       children.delete(child);
       clearTimeout(timeout); clearTimeout(killTimer); clearInterval(cancelTimer);
       let evidence;
-      try { evidence = JSON.parse(readFileSync(resolve(job.directory, 'results.json'), 'utf8')); } catch { /* Missing evidence fails closed. */ }
-      done({ device: job.device.id, code, signal, spawnError, timedOut,
+      try { evidence = JSON.parse(readFileSync(resolve(batchDir, 'results.json'), 'utf8')); } catch { /* Missing evidence fails closed. */ }
+      done({ device: job.device.id, nodeids: batch.map((item) => item.nodeid), code, signal, spawnError, timedOut,
         seconds: (Date.now() - begin) / 1000,
-        passed: !cancelled && !timedOut && code === 0 && validateResults(job.cases, evidence),
+        passed: !cancelled && !timedOut && code === 0 && validateResults(batch, evidence),
         evidence: evidence || null });
     });
-  })));
+  });
+  results = await Promise.all(workers.map(async (job) => {
+    job.directory = resolve(resultDir, `${job.index + 1}-${job.device.id}`);
+    mkdirSync(job.directory, { recursive: true });
+    const assigned = dynamic ? [] : job.cases;
+    const batches = [];
+    if (dynamic) {
+      while (!cancelled) {
+        const unit = pending.shift();
+        if (!unit) break;
+        const result = await runBatch(job, unit.cases, unit.index);
+        batches.push(result);
+        completed.push(...(result.evidence?.cases || []));
+        write('progress.json', { completed: completed.length, total: cases.length,
+          pending: pending.reduce((total, item) => total + item.cases.length, 0), active: workers.length });
+      }
+    } else if (assigned.length) {
+      const result = await runBatch(job, assigned, 0);
+      batches.push(result);
+      completed.push(...(result.evidence?.cases || []));
+    }
+    const caseResults = batches.flatMap((batch) => {
+      const evidenceById = new Map((batch.evidence?.cases || []).map((item) => [item.nodeid, item]));
+      return batch.nodeids.map((nodeid) => {
+        const item = evidenceById.get(nodeid);
+        return {
+          device: job.device.id, nodeid,
+          passed: Boolean(batch.passed && item
+            && ['setup', 'call', 'teardown'].every((phase) => item[phase]?.outcome === 'passed') && !item.xfail),
+          seconds: item ? ['setup', 'call', 'teardown'].reduce((total, phase) => total + (item[phase]?.seconds || 0), 0) : 0,
+          batchSeconds: batch.seconds, timedOut: batch.timedOut, evidence: item || null,
+        };
+      });
+    });
+    return { device: job.device.id, passed: batches.length > 0 && batches.every((item) => item.passed),
+      seconds: batches.reduce((total, item) => total + item.seconds, 0), cases: caseResults };
+  }));
 } catch (error) {
   failure = error.message;
   console.error(`[farm] ${failure}`);
@@ -247,12 +314,16 @@ try {
     }
     catch (error) { cleanupOk = false; console.error(`[farm] Proxy cleanup failed: ${error.message}`); }
   }
-  const passed = !failure && !cancelled && !forced && cleanupOk && results.length === jobs.length && results.every((item) => item.passed);
+  const completedCases = results.flatMap((worker) => worker.cases || []);
+  const completedIds = completedCases.map((item) => item.nodeid);
+  const passed = !failure && !cancelled && !forced && cleanupOk && results.length === workers.length && results.every((item) => item.passed)
+    && completedIds.length === cases.length && new Set(completedIds).size === cases.length
+    && cases.every((item) => completedIds.includes(item.nodeid));
   write('summary.json', { runId, platform, environment, suite: values.suite, mode: values.mode,
     seconds: (Date.now() - started) / 1000, passed, cancelled, forced, cleanupOk, failure, results });
   if (cleanupOk) for (const release of releases.reverse()) release();
   else console.error(`[farm] Locks retained in ${locks}. Verify sessions/network recovery before removing the affected owner.json and lock directories.`);
   process.removeListener('SIGINT', interrupt); process.removeListener('SIGTERM', interrupt);
-  console.log(`[farm] ${passed ? 'PASS' : 'FAIL'}; ${results.filter((item) => item.passed).length}/${jobs.length} workers passed; artifacts: ${resultDir}`);
+  console.log(`[farm] ${passed ? 'PASS' : 'FAIL'}; ${results.filter((item) => item.passed).length}/${workers.length} workers passed; artifacts: ${resultDir}`);
   process.exitCode = cancelled ? 130 : passed ? 0 : 1;
 }

@@ -77,7 +77,7 @@ if (args.includes('--collect-only')) {
   return { run, invocations, commands, env };
 }
 
-test('real coordinator launches only nonempty workers, with distinct ports/artifacts, and restores radios', async (t) => {
+test('real coordinator dynamically claims module batches once, with distinct worker ports/artifacts, and restores radios', async (t) => {
   const f = await fixture(t);
   const { code, summary, output } = await f.run();
   assert.equal(code, 0, output);
@@ -86,6 +86,7 @@ test('real coordinator launches only nonempty workers, with distinct ports/artif
   assert.equal(workers.length, 2);
   assert.equal(new Set(workers.map((worker) => worker.port)).size, 2);
   assert.equal(new Set(workers.map((worker) => worker.root)).size, 2);
+  assert.equal(summary.results.flatMap((worker) => worker.cases).length, 2);
   assert.ok(workers.every((worker) => worker.version === '15'));
   assert.ok(Math.abs(workers[0].start - workers[1].start) < 200, 'workers must overlap');
   const commands = readFileSync(f.commands, 'utf8').trim().split('\n').map(JSON.parse);
@@ -99,7 +100,7 @@ for (const behavior of ['skip', 'missing', 'hang']) {
     assert.equal(code, 1);
     assert.equal(summary.passed, false);
     assert.equal(summary.cleanupOk, true);
-    if (behavior === 'hang') assert.ok(summary.results.every((item) => item.timedOut));
+    if (behavior === 'hang') assert.ok(summary.results.every((worker) => worker.cases.every((item) => item.timedOut)));
   });
 }
 

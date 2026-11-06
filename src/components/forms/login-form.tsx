@@ -115,7 +115,7 @@ export function LoginForm({
         </View>
       )}
       <Button
-        testID="login_submit_renamed_btn"
+        testID="login_submit_btn"
         accessibilityLabel="Sign in"
         disabled={isLoading}
         onPress={submit}

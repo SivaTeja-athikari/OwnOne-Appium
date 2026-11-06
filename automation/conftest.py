@@ -44,6 +44,10 @@ def pytest_addoption(parser):
         help="Use isolated function-scoped sessions and accounts on a leased farm device",
     )
     parser.addoption(
+        "--farm-reuse-session", action="store_true", default=False,
+        help="Reuse one driver and account across a dependency-safe farm module batch",
+    )
+    parser.addoption(
         "--reuse-app-session",
         action="store_true",
         default=False,
@@ -108,7 +112,9 @@ def tenant_config(company: str):
     return get_tenant_config(company)
 
 def _app_driver_scope(fixture_name, config):
-    return "session" if config.getoption("--reuse-app-session") and not config.getoption("--farm-worker") else "function"
+    farm_reuse = config.getoption("--farm-reuse-session")
+    reuse = config.getoption("--reuse-app-session") and not config.getoption("--farm-worker")
+    return "session" if farm_reuse or reuse else "function"
 
 
 @pytest.fixture(scope=_app_driver_scope)

@@ -108,7 +108,10 @@ class BasePage:
                 _, container = max(containers, key=lambda pair: pair[0])
                 try:
                     moved = self.driver.execute_script('mobile: scrollGesture', {
-                        'elementId': container.id, 'direction': direction, 'percent': 0.75,
+                        # Smaller, moderate-speed gestures behave more like a
+                        # deliberate user drag and avoid jumping past fields.
+                        'elementId': container.id, 'direction': direction,
+                        'percent': 0.55, 'speed': 1800,
                     })
                     if moved:
                         return True
@@ -120,7 +123,11 @@ class BasePage:
             # Some Android builds expose a wrapper ScrollView that reports
             # no scroll range while its child content is still scrollable.
             # Fall back to a gesture over the app content viewport.
-            return self.driver.execute_script('mobile: scrollGesture', {'left': int(size['width'] * 0.12), 'top': int(size['height'] * 0.24), 'width': int(size['width'] * 0.76), 'height': int(size['height'] * 0.60), 'direction': direction, 'percent': 0.75})
+            return self.driver.execute_script('mobile: scrollGesture', {
+                'left': int(size['width'] * 0.12), 'top': int(size['height'] * 0.24),
+                'width': int(size['width'] * 0.76), 'height': int(size['height'] * 0.60),
+                'direction': direction, 'percent': 0.55, 'speed': 1800,
+            })
         if self.driver.capabilities.get('platformName', '').lower() == 'ios':
             containers = [
                 element
@@ -130,6 +137,9 @@ class BasePage:
             gesture = {'direction': 'up' if direction == 'down' else 'down'}
             if containers:
                 gesture['elementId'] = containers[0].id
+            # XCUITest's swipe supports velocity in px/s; keep it moderate so
+            # the viewport advances naturally instead of jumping several rows.
+            gesture['velocity'] = 1200
             self.driver.execute_script('mobile: swipe', gesture)
         return True
 
@@ -177,10 +187,6 @@ class BasePage:
         element = self.scroll_to(test_id)
         WebDriverWait(self.driver, timeout or self.timeout).until(lambda _: element.is_enabled())
         if not self.is_mock:
-            size = self.driver.get_window_size()
-            if element.rect['y'] + element.rect['height'] > size['height'] - 110:
-                self.scroll('down')
-                element = self.find_element(test_id)
             previous = [None]
             def settled(_):
                 current = element.rect

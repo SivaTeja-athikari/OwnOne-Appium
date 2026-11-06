@@ -69,10 +69,10 @@ pipeline {
         )
 
         // ---------- HOW to run ----------
-        string(
-            name: 'GROUP_BY',
-            defaultValue: 'case',
-            description: 'Farm sharding granularity passed to run-device-farm.mjs --group-by (default: case).'
+        choice(
+            name: 'FARM_SCHEDULING_MODE',
+            choices: ['shard', 'replicate'],
+            description: 'Farm only. shard runs each case once across devices using a dynamic queue; replicate runs the full suite on every device.'
         )
         string(
             name: 'TEST_TIMEOUT_MIN',
@@ -393,14 +393,26 @@ echo "$udid"
                             cd "$PROJECT_DIR"
                             export AUTOMATION_PYTHON="automation/.venv/bin/python"
 
+                            rm -rf automation/reports/current-run
+                            mkdir -p automation/reports/current-run
+
                             if [ "$RUN_MODE" = "farm" ]; then
                                 echo "============================================================"
-                                echo "Executing Sharded Farm: $TARGET_PLATFORM / $TARGET_ENVIRONMENT / $TEST_SUITE"
+                                echo "Executing Farm ($FARM_SCHEDULING_MODE): $TARGET_PLATFORM / $TARGET_ENVIRONMENT / $TEST_SUITE"
                                 echo "   Device Pool: $ANDROID_FARM_DEVICES"
-                                echo "   Sharding:    --group-by ${GROUP_BY:-case}"
+                                echo "   Scheduling:  --mode ${FARM_SCHEDULING_MODE:-shard}"
                                 echo "============================================================"
                                 node scripts/run-device-farm.mjs "$TARGET_PLATFORM" "$TARGET_ENVIRONMENT" \
-                                    --group-by "${GROUP_BY:-case}"
+                                    --mode "${FARM_SCHEDULING_MODE:-shard}"
+
+                                latest_farm_dir=$(ls -td automation/reports/farm/*/ 2>/dev/null | head -1)
+                                if [ -n "$latest_farm_dir" ] && [ -d "$latest_farm_dir" ]; then
+                                    find "$latest_farm_dir" -name "junit.xml" | while read -r jfile; do
+                                        batch_name=$(basename "$(dirname "$jfile")")
+                                        device_name=$(basename "$(dirname "$(dirname "$jfile")")")
+                                        cp "$jfile" "automation/reports/current-run/junit-${device_name}-${batch_name}.xml"
+                                    done
+                                fi
                             else
                                 target_device="${ANDROID_UDID:-${IOS_UDID:-default}}"
                                 suite="test:reports:${TARGET_PLATFORM}:${TEST_SUITE}:${TARGET_ENVIRONMENT}"
@@ -414,6 +426,7 @@ echo "$udid"
                                     exit 2
                                 fi
                                 npm run "$suite"
+                                cp automation/reports/junit-*.xml automation/reports/current-run/ 2>/dev/null || true
                             fi
                         '''
                     }
@@ -441,11 +454,38 @@ echo "$udid"
                     echo "[DEVICE FARM SUMMARY]:"
                     cat "$latest_summary"
                 fi
+
+                allure_results="automation/reports/jenkins-allure-results-${BUILD_NUMBER}"
+                allure_report="automation/reports/jenkins-allure-report-${BUILD_NUMBER}"
+                mkdir -p "$allure_results"
+                allure_sources="$allure_results/.source-files"
+                find automation/reports -type f -path '*/allure-results/*' -newer automation/reports/.build-start -print > "$allure_sources"
+                while IFS= read -r source_file; do
+                    cp -n "$source_file" "$allure_results/"
+                done < "$allure_sources"
+                rm -f "$allure_sources"
+                if find "$allure_results" -type f -print -quit | grep -q .; then
+                    if ./node_modules/.bin/allure generate "$allure_results" --clean -o "$allure_report"; then
+                        echo "Allure HTML report generated at $allure_report/index.html"
+                    else
+                        echo "WARNING: Allure HTML report generation failed; raw results will still be archived."
+                    fi
+                else
+                    echo "No Allure result files were produced for this build."
+                fi
             '''
             script {
                 dir(env.PROJECT_DIR) {
-                    junit testResults: 'automation/reports/**/junit*.xml,automation/reports/junit*.xml', allowEmptyResults: true
-                    archiveArtifacts artifacts: 'automation/reports/healed_locators.json,automation/reports/farm/**,automation/reports/*.xml,automation/reports/allure-results/**,automation/reports/jenkins-appium.log', allowEmptyArchive: true
+                    junit testResults: 'automation/reports/current-run/*.xml', allowEmptyResults: true
+                    archiveArtifacts artifacts: 'automation/reports/healed_locators.json,automation/reports/farm/**,automation/reports/current-run/**,automation/reports/*.xml,automation/reports/allure-results/**,automation/reports/jenkins-appium.log', allowEmptyArchive: true
+                    publishHTML(target: [
+                        allowMissing: true,
+                        alwaysLinkToLastBuild: true,
+                        keepAll: true,
+                        reportDir: "automation/reports/jenkins-allure-report-${env.BUILD_NUMBER}",
+                        reportFiles: 'index.html',
+                        reportName: 'Mobile Allure Report'
+                    ])
                 }
 
                 currentBuild.description = "[${currentBuild.currentResult}] ${currentBuild.description ?: ''}"

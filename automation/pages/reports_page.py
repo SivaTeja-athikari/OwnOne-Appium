@@ -194,8 +194,29 @@ class ReportsPage(BasePage):
         except Exception:
             return False
 
+    def _dropdown_element(self, field):
+        test_id = f'report_{field}_dropdown'
+        self.hide_keyboard_if_present()
+        elem = self._visible(test_id)
+        if elem:
+            return elem
+        if not self.is_mock and self.driver.capabilities.get('platformName', '').lower() == 'android':
+            prefix = 'Report type:' if field == 'category' else 'Priority:'
+            try:
+                for match in self.driver.find_elements(
+                    AppiumBy.ANDROID_UIAUTOMATOR,
+                    f'new UiSelector().descriptionStartsWith("{prefix}")',
+                ):
+                    if match.is_displayed():
+                        return match
+            except WebDriverException:
+                pass
+        return self.scroll_to(test_id)
+
     def select_dropdown(self, field, value):
-        self.click(f'report_{field}_dropdown')
+        self.hide_keyboard_if_present()
+        elem = self._dropdown_element(field)
+        elem.click()
         self.demo_pause()
         self.click(f'report_{field}_option_{value.replace(" ", "_")}')
         self.demo_pause()
@@ -207,7 +228,7 @@ class ReportsPage(BasePage):
         self.demo_pause()
 
     def dropdown_value(self, field):
-        element = self.scroll_to(f'report_{field}_dropdown')
+        element = self._dropdown_element(field)
         platform = self.driver.capabilities.get('platformName', '').lower()
         attr = 'label' if platform == 'ios' else 'content-desc'
         accessible_label = element.get_attribute(attr) or ''
