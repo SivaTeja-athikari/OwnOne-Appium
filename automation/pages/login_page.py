@@ -1,6 +1,6 @@
 """Sign in with credentials created through the Signup screen."""
 from automation.pages.base_page import BasePage
-from selenium.common.exceptions import WebDriverException
+from selenium.common.exceptions import TimeoutException, WebDriverException
 from selenium.webdriver.support.ui import WebDriverWait
 from appium.webdriver.common.appiumby import AppiumBy
 
@@ -44,10 +44,19 @@ class LoginPage(BasePage):
                 return False
 
         return WebDriverWait(self.driver, 60, poll_frequency=0.3).until(
-            lambda _: 'login' if self._visible(self.SUBMIT_BUTTON) or visible_android_text('Sign in')
+            lambda _: 'login' if self._login_submit_visible() or visible_android_text('Sign in')
             else ('dashboard' if visible_workspace() else False),
             'Neither Login nor Reports became visible',
         )
+
+    def _login_submit_visible(self):
+        if self._visible(self.SUBMIT_BUTTON):
+            return True
+        try:
+            self.find_element(self.SUBMIT_BUTTON, timeout=0)
+            return True
+        except TimeoutException:
+            return False
 
     def login_result(self, timeout=60):
         from automation.pages.reports_page import ReportsPage
@@ -78,7 +87,12 @@ class LoginPage(BasePage):
         from automation.pages.signup_page import SignupPage
         from automation.pages.reports_page import ReportsPage
         signup = SignupPage(self.driver)
-        if signup.is_visible(signup.NAME_INPUT, timeout=2):
+        try:
+            signup.find_element(signup.NAME_INPUT, timeout=0)
+            on_signup = True
+        except TimeoutException:
+            on_signup = False
+        if on_signup:
             if self.driver.capabilities.get('platformName', '').lower() == 'android' and not self.is_mock:
                 self.driver.back()
             else:
@@ -108,9 +122,14 @@ class LoginPage(BasePage):
         """Wait for the login form to mount; each input action waits until enabled."""
         def ready(_):
             try:
-                fields = [self._visible(test_id) for test_id in (self.EMAIL_INPUT, self.PASSWORD_INPUT, self.SUBMIT_BUTTON)]
+                fields = []
+                for test_id in (self.EMAIL_INPUT, self.PASSWORD_INPUT, self.SUBMIT_BUTTON):
+                    element = self._visible(test_id)
+                    if not element:
+                        element = self.find_element(test_id, timeout=0)
+                    fields.append(element)
                 return all(fields)
-            except WebDriverException:
+            except (TimeoutException, WebDriverException):
                 # Firebase auth can replace the login tree while Appium is
                 # inspecting it. Retry against the fresh accessibility tree.
                 return False
@@ -123,7 +142,7 @@ class LoginPage(BasePage):
         from automation.pages.signup_page import SignupPage
         signup = SignupPage(self.driver)
 
-        if signup._visible(signup.NAME_INPUT) and signup._visible(signup.EMAIL_INPUT):
+        if signup.wait_for_form_ready(timeout=0):
             return signup
 
         self.hide_keyboard_if_present()
@@ -132,7 +151,7 @@ class LoginPage(BasePage):
         # Give the route transition a short window to mount
         try:
             return WebDriverWait(self.driver, 4, poll_frequency=0.3).until(
-                lambda _: signup if (signup._visible(signup.NAME_INPUT) and signup._visible(signup.EMAIL_INPUT)) else False
+                lambda _: signup if signup.wait_for_form_ready(timeout=0) else False
             )
         except TimeoutException:
             pass
@@ -151,7 +170,7 @@ class LoginPage(BasePage):
 
             try:
                 return WebDriverWait(self.driver, 4, poll_frequency=0.3).until(
-                    lambda _: signup if (signup._visible(signup.NAME_INPUT) and signup._visible(signup.EMAIL_INPUT)) else False
+                    lambda _: signup if signup.wait_for_form_ready(timeout=0) else False
                 )
             except TimeoutException:
                 pass
@@ -169,7 +188,7 @@ class LoginPage(BasePage):
                 pass
 
         WebDriverWait(self.driver, 15, poll_frequency=0.3).until(
-            lambda _: signup._visible(signup.NAME_INPUT) and signup._visible(signup.EMAIL_INPUT),
+            lambda _: signup.wait_for_form_ready(timeout=0),
             'Signup form fields did not become ready after selecting Create an account',
         )
         return signup

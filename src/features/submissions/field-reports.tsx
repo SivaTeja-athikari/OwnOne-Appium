@@ -8,6 +8,7 @@ import { AuthField } from '@/components/forms/auth-field';
 import { AppIcon, Button, Card, ui } from '@/components/ui/workspace-ui';
 import { WorkspaceScreen } from '@/components/ui/workspace-screen';
 import { deleteDraft, listReports, saveReport, type ChecklistItem, type Report, type ReportFields, type ReportOutcome, type RiskAssessment, type Scope } from './storage';
+import { REPORT_FORM_SCHEMA, type ReportFormField } from './form-schema';
 import { isSending, notifyReports, subscribeReports, syncReports } from './sync';
 
 const CHECKLIST_TEMPLATE: ChecklistItem[] = [
@@ -17,6 +18,12 @@ const CHECKLIST_TEMPLATE: ChecklistItem[] = [
 ];
 type ValidationField = 'title' | 'location' | 'details' | 'emergencyContact' | 'followUpDate';
 type DropdownKey = 'category' | 'priority';
+
+function schemaFieldValue(report: Report, field: ReportFormField): string {
+  return field.binding
+    ? String(report[field.binding] ?? '')
+    : String(report.customFields?.[field.id] ?? '');
+}
 
 const DROPDOWN_HINTS = {
   category: {
@@ -96,7 +103,7 @@ function dateAfterDays(days: number): string {
 }
 
 function blank(): Report {
-  return { id:randomUUID(),title:'',details:'',location:'',category:'Site visit',priority:'Normal',outcome:'Completed',riskAssessment:'Low',emergencyContact:'',requiresFollowUp:false,followUpDate:'',checklist:CHECKLIST_TEMPLATE.map(item => ({ ...item })),signOffName:'',workOrderReference:'',nextAction:'',status:'draft',createdAt:new Date().toISOString(),error:'',confirmedAt:null };
+  return { id:randomUUID(),title:'',details:'',location:'',category:'Site visit',priority:'Normal',outcome:'Completed',riskAssessment:'Low',emergencyContact:'',requiresFollowUp:false,followUpDate:'',checklist:CHECKLIST_TEMPLATE.map(item => ({ ...item })),signOffName:'',workOrderReference:'',nextAction:'',customFields:{},formSchemaId:REPORT_FORM_SCHEMA.formId,formSchemaVersion:REPORT_FORM_SCHEMA.version,status:'draft',createdAt:new Date().toISOString(),error:'',confirmedAt:null };
 }
 
 function reportFieldError(field: ValidationField, value: string): string | undefined {
@@ -165,7 +172,7 @@ export function FieldReports({ scope }: { scope: Scope }) {
     const unsubscribe = subscribeReports(() => void refresh());
     return () => { active = false; unsubscribe(); };
   },[scope]);
-  const update = (key: keyof Report, value: string | boolean | ChecklistItem[] | undefined) => {
+  const update = (key: keyof Report, value: string | boolean | ChecklistItem[] | Record<string,string> | undefined) => {
     if (submitting.current) return;
     const next = { ...latest.current,[key]:value } as Report;
     latest.current = next;
@@ -224,7 +231,28 @@ export function FieldReports({ scope }: { scope: Scope }) {
   ]);
   const pending = rows.filter(r => r.status === 'pending');
   const toggleChecklist = (id: string) => update('checklist',(latest.current.checklist ?? CHECKLIST_TEMPLATE).map(item => item.id === id ? { ...item,passed:!item.passed } : item));
-  const hasDraftContent = Boolean(form.title || form.details || form.location || form.emergencyContact || form.signOffName || form.workOrderReference || form.nextAction || form.requiresFollowUp || form.category !== 'Site visit' || form.priority !== 'Normal' || form.outcome !== 'Completed' || form.riskAssessment !== 'Low' || form.checklist?.some(item => item.passed));
+  const renderSchemaField = (field: ReportFormField) => (
+    <AuthField
+      key={field.id}
+      fieldSchemaId={field.id}
+      label={field.label}
+      testID={field.legacyTestID}
+      errorTestID={field.legacyErrorTestID}
+      value={schemaFieldValue(form,field)}
+      onChangeText={value => {
+        if (field.binding) update(field.binding,value);
+        else update('customFields',{ ...(latest.current.customFields ?? {}),[field.id]:value });
+      }}
+      maxLength={field.maxLength}
+      multiline={field.type === 'multiline'}
+      numberOfLines={field.numberOfLines}
+      keyboardType={field.type === 'phone' ? 'phone-pad' : 'default'}
+      editable={ready && !busy}
+      placeholder={field.placeholder}
+      error={field.validationKey ? fieldErrors[field.validationKey] : undefined}
+    />
+  );
+  const hasDraftContent = Boolean(form.title || form.details || form.location || form.emergencyContact || form.signOffName || form.workOrderReference || form.nextAction || Object.values(form.customFields ?? {}).some(Boolean) || form.requiresFollowUp || form.category !== 'Site visit' || form.priority !== 'Normal' || form.outcome !== 'Completed' || form.riskAssessment !== 'Low' || form.checklist?.some(item => item.passed));
   const applyScenario = (scenario: ScenarioStarter) => {
     const apply = () => {
       const current = latest.current;
@@ -327,8 +355,7 @@ export function FieldReports({ scope }: { scope: Scope }) {
         </Pressable>
       </View>}
       <Text style={[styles.sectionLabel,{ color:theme.accent }]}>01  /  THE ESSENTIALS</Text>
-      <AuthField label="Report title *" testID="report_title_input" errorTestID="report_title_error" value={form.title} onChangeText={v => update('title',v)} maxLength={120} editable={ready && !busy} placeholder="e.g. Delivery completed at client site" error={fieldErrors.title} />
-      <AuthField label="Site / location *" testID="report_location_input" errorTestID="report_location_error" value={form.location ?? ''} onChangeText={v => update('location',v)} maxLength={160} editable={ready && !busy} placeholder="e.g. Hyderabad · Warehouse 02" error={fieldErrors.location} />
+      {REPORT_FORM_SCHEMA.fields.filter(field => field.section === 'essentials').map(renderSchemaField)}
       <AuthField label="Customer / work order reference (optional)" testID="report_work_order_reference_input" value={form.workOrderReference ?? ''} onChangeText={v => update('workOrderReference',v)} maxLength={80} editable={ready && !busy} placeholder="e.g. WO-2048 or service ticket ID" />
       {([
         ['category', 'Report type'],
@@ -402,7 +429,7 @@ export function FieldReports({ scope }: { scope: Scope }) {
         </Pressable>
       </View>)}
       <Text style={[styles.sectionLabel,{ color:theme.accent }]}>02  /  THE FULL PICTURE</Text>
-      <AuthField label="What happened? *" testID="report_details_input" errorTestID="report_details_error" value={form.details} onChangeText={v => update('details',v)} maxLength={2000} multiline numberOfLines={5} editable={ready && !busy} placeholder="Describe the work completed and any follow-up needed" error={fieldErrors.details} />
+      {REPORT_FORM_SCHEMA.fields.filter(field => field.section === 'details').map(renderSchemaField)}
       <Text style={[ui.small,{ color:theme.textSecondary }]}>{form.details.length}/2000 characters{saving ? ' · Saving draft…' : ''}</Text>
       <AuthField label="Next action / handover (optional)" testID="report_next_action_input" value={form.nextAction ?? ''} onChangeText={v => update('nextAction',v)} maxLength={1000} multiline numberOfLines={3} editable={ready && !busy} placeholder="Who needs to do what next? Add a handover note if useful." />
       <Text style={[styles.sectionLabel,{ color:theme.accent }]}>03  /  WORK & SAFETY</Text>
@@ -419,13 +446,13 @@ export function FieldReports({ scope }: { scope: Scope }) {
         </View>
         <Text style={[ui.small,{ color:theme.textSecondary }]}>Select the highest risk observed during this visit.</Text>
       </View>
-      <AuthField label="On-site contact phone (optional)" testID="report_emergency_contact_input" errorTestID="report_emergency_contact_error" value={form.emergencyContact ?? ''} onChangeText={v => update('emergencyContact',v)} maxLength={24} keyboardType="phone-pad" editable={ready && !busy} placeholder="e.g. +1 415 555 0130" error={fieldErrors.emergencyContact} />
+      {REPORT_FORM_SCHEMA.fields.filter(field => field.section === 'work-safety' && !field.visibleWhen).map(renderSchemaField)}
       <View style={styles.group}>
         <Pressable testID="report_requires_follow_up_toggle" accessibilityRole="switch" accessibilityState={{ checked:Boolean(form.requiresFollowUp),disabled:!ready || busy }} disabled={!ready || busy} onPress={() => update('requiresFollowUp',!form.requiresFollowUp)} style={styles.followUpToggle}>
           <View style={{ flex:1,gap:3 }}><Text style={[ui.small,{ color:theme.text,fontWeight:'700' }]}>Follow-up required</Text><Text style={[ui.small,{ color:theme.textSecondary }]}>Schedule a next action for this report.</Text></View>
           <View style={[styles.switchTrack,{ backgroundColor:form.requiresFollowUp ? theme.accent : theme.border }]}><View style={[styles.switchThumb,form.requiresFollowUp && styles.switchThumbOn]} /></View>
         </Pressable>
-        {form.requiresFollowUp && <View style={styles.group}><AuthField label="Follow-up due date *" testID="report_follow_up_date_input" errorTestID="report_follow_up_date_error" value={form.followUpDate ?? ''} onChangeText={v => update('followUpDate',v)} maxLength={10} editable={ready && !busy} placeholder="YYYY-MM-DD" error={fieldErrors.followUpDate} /><Text style={[ui.small,{ color:theme.textSecondary }]}>Use YYYY-MM-DD. The date can be today or later.</Text></View>}
+        {form.requiresFollowUp && <View style={styles.group}>{REPORT_FORM_SCHEMA.fields.filter(field => field.visibleWhen === 'requiresFollowUp' && Boolean(form[field.visibleWhen])).map(renderSchemaField)}<Text style={[ui.small,{ color:theme.textSecondary }]}>Use YYYY-MM-DD. The date can be today or later.</Text></View>}
       </View>
       <View style={styles.group}>
         <Text style={[ui.small,{ color:theme.text,fontWeight:'700' }]}>Visit checklist</Text>

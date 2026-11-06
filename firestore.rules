@@ -10,7 +10,7 @@ service cloud.firestore {
       allow list, update, delete: if false;
       allow create: if authorized()
         && request.resource.data.keys().hasAll(['ownerId','tenantId','title','details','createdAt'])
-        && request.resource.data.keys().hasOnly(['ownerId','tenantId','title','details','createdAt','location','category','priority','outcome','riskAssessment','emergencyContact','requiresFollowUp','followUpDate','checklist','signOffName','workOrderReference','nextAction'])
+        && request.resource.data.keys().hasOnly(['ownerId','tenantId','title','details','createdAt','location','category','priority','outcome','riskAssessment','emergencyContact','requiresFollowUp','followUpDate','checklist','signOffName','workOrderReference','nextAction','customFields','formSchemaId','formSchemaVersion'])
         && (!('location' in request.resource.data) || (request.resource.data.location is string && request.resource.data.location.size() <= 160))
         && (!('category' in request.resource.data) || request.resource.data.category in ['Site visit','Delivery','Maintenance','Incident'])
         && (!('priority' in request.resource.data) || request.resource.data.priority in ['Normal','High','Urgent'])
@@ -20,6 +20,19 @@ service cloud.firestore {
         && (!('signOffName' in request.resource.data) || (request.resource.data.signOffName is string && request.resource.data.signOffName.size() <= 120))
         && (!('workOrderReference' in request.resource.data) || (request.resource.data.workOrderReference is string && request.resource.data.workOrderReference.size() <= 80))
         && (!('nextAction' in request.resource.data) || (request.resource.data.nextAction is string && request.resource.data.nextAction.size() <= 1000))
+        // Custom field IDs are schema-generated and intentionally not hard-coded
+        // here, so clients can add/reorder fields without another rules deploy.
+        // Firestore Rules cannot iterate arbitrary map entries to validate each
+        // value's type/length; the app enforces those per-field constraints.
+        && (!('customFields' in request.resource.data) || (
+          request.resource.data.customFields is map
+          && request.resource.data.customFields.size() <= 50
+          && 'formSchemaId' in request.resource.data
+          && 'formSchemaVersion' in request.resource.data
+        ))
+        && (!('formSchemaId' in request.resource.data) || (request.resource.data.formSchemaId is string && request.resource.data.formSchemaId.size() <= 80))
+        && (!('formSchemaVersion' in request.resource.data) || (request.resource.data.formSchemaVersion is int && request.resource.data.formSchemaVersion > 0))
+        && (('formSchemaId' in request.resource.data) == ('formSchemaVersion' in request.resource.data))
         && (!('requiresFollowUp' in request.resource.data) || request.resource.data.requiresFollowUp is bool)
         && (!('followUpDate' in request.resource.data) || (request.resource.data.followUpDate is string && request.resource.data.followUpDate.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$') && request.resource.data.requiresFollowUp == true))
         && (!('requiresFollowUp' in request.resource.data) || request.resource.data.requiresFollowUp == false || 'followUpDate' in request.resource.data)

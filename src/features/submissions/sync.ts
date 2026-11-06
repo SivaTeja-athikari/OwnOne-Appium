@@ -11,6 +11,7 @@ export const isSending = () => running;
 type FirestoreValue = {
   stringValue?: string;
   booleanValue?: boolean;
+  integerValue?: string;
   arrayValue?: { values: { mapValue: { fields: Record<string, FirestoreValue> } }[] };
   mapValue?: { fields: Record<string, FirestoreValue> };
 };
@@ -48,6 +49,11 @@ async function send(s: Scope, r: Report) {
     ...(r.signOffName ? { signOffName:{ stringValue:r.signOffName } } : {}),
     ...(r.workOrderReference ? { workOrderReference:{ stringValue:r.workOrderReference } } : {}),
     ...(r.nextAction ? { nextAction:{ stringValue:r.nextAction } } : {}),
+    ...(r.customFields && Object.keys(r.customFields).length ? { customFields:{ mapValue:{ fields:Object.fromEntries(
+      Object.entries(r.customFields).map(([id,value]) => [id,{ stringValue:value }]),
+    ) } } } : {}),
+    ...(r.formSchemaId ? { formSchemaId:{ stringValue:r.formSchemaId } } : {}),
+    ...(r.formSchemaVersion ? { formSchemaVersion:{ integerValue:String(r.formSchemaVersion) } } : {}),
     ...(r.checklist?.length ? { checklist:{ arrayValue:{ values:r.checklist.map(item => ({ mapValue:{ fields:{
       id:{ stringValue:item.id }, label:{ stringValue:item.label }, passed:{ booleanValue:item.passed },
     } } })) } } } : {}),

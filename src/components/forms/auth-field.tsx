@@ -15,13 +15,14 @@ export function AuthField({
   password = false,
   error,
   errorTestID,
+  fieldSchemaId,
   ...props
-}: TextInputProps & { label: string; password?: boolean; error?: string; errorTestID?: string }) {
+}: TextInputProps & { label: string; password?: boolean; error?: string; errorTestID?: string; fieldSchemaId?: string }) {
   const theme = useTheme();
   const [focused, setFocused] = useState(false);
   const [show, setShow] = useState(false);
   return (
-    <View style={{ gap: 8 }}>
+    <View testID={fieldSchemaId ? `form_field_${fieldSchemaId}` : undefined} style={{ gap: 8 }}>
       <Text accessible testID={props.testID ? `${props.testID}_label` : undefined} accessibilityLabel={label} style={[styles.label, { color: error ? theme.danger : theme.text }]}>
         {label.replace(/\s\*$/, '')}
         {label.trimEnd().endsWith('*') && <Text style={{ color: theme.danger }}> *</Text>}

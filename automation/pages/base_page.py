@@ -217,10 +217,25 @@ class BasePage:
                 except WebDriverException:
                     return False
 
-            element = WebDriverWait(self.driver, wait_timeout, poll_frequency=0.25).until(
-                interactable,
-                f'Enabled element not found: {test_id}',
-            )
+            try:
+                element = WebDriverWait(self.driver, wait_timeout, poll_frequency=0.25).until(
+                    interactable,
+                    f'Enabled element not found: {test_id}',
+                )
+            except TimeoutException:
+                # Text entry has its own interactability wait, so it must invoke
+                # healing explicitly when the primary testID is no longer in
+                # the native tree. find_element()'s fallback does not cover
+                # this direct _visible() polling path.
+                element = self.healer.heal(
+                    self.driver, test_id, screen=self.__class__.__name__,
+                ) if self.healing_enabled else None
+                if not element:
+                    raise
+                element = WebDriverWait(self.driver, wait_timeout, poll_frequency=0.25).until(
+                    lambda _: element if element.is_displayed() and element.is_enabled() else False,
+                    f'Healed element is not enabled: {test_id}',
+                )
             try:
                 if not self.is_mock and self.driver.capabilities.get('platformName', '').lower() == 'android':
                     # Android 17 can replace a React Native input's

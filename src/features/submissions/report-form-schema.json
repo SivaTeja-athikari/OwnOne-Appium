@@ -1,0 +1,83 @@
+{
+  "formId": "field-report",
+  "version": 2,
+  "fields": [
+    {
+      "id": "fld_client_asset_code",
+      "type": "text",
+      "section": "essentials",
+      "label": "Client asset code (optional)",
+      "placeholder": "Enter the asset code",
+      "required": false,
+      "maxLength": 80,
+      "custom": true
+    },
+    {
+      "id": "fld_01J_REPORT_LOCATION",
+      "binding": "location",
+      "type": "text",
+      "section": "essentials",
+      "label": "Site / location *",
+      "placeholder": "e.g. Hyderabad · Warehouse 02",
+      "required": true,
+      "maxLength": 160,
+      "validationKey": "location",
+      "legacyTestID": "report_location_input",
+      "legacyErrorTestID": "report_location_error"
+    },
+    {
+      "id": "fld_01J_REPORT_TITLE",
+      "binding": "title",
+      "type": "text",
+      "section": "essentials",
+      "label": "Report title *",
+      "placeholder": "e.g. Delivery completed at client site",
+      "required": true,
+      "maxLength": 120,
+      "validationKey": "title",
+      "legacyTestID": "report_title_input",
+      "legacyErrorTestID": "report_title_error"
+    },
+    {
+      "id": "fld_01J_REPORT_DETAILS",
+      "binding": "details",
+      "type": "multiline",
+      "section": "details",
+      "label": "What happened? *",
+      "placeholder": "Describe the work completed and any follow-up needed",
+      "required": true,
+      "maxLength": 2000,
+      "numberOfLines": 5,
+      "validationKey": "details",
+      "legacyTestID": "report_details_input",
+      "legacyErrorTestID": "report_details_error"
+    },
+    {
+      "id": "fld_01J_REPORT_CONTACT",
+      "binding": "emergencyContact",
+      "type": "phone",
+      "section": "work-safety",
+      "label": "On-site contact phone (optional)",
+      "placeholder": "e.g. +1 415 555 0130",
+      "required": false,
+      "maxLength": 24,
+      "validationKey": "emergencyContact",
+      "legacyTestID": "report_emergency_contact_input",
+      "legacyErrorTestID": "report_emergency_contact_error"
+    },
+    {
+      "id": "fld_01J_REPORT_FOLLOW_UP_DATE",
+      "binding": "followUpDate",
+      "type": "date",
+      "section": "work-safety",
+      "label": "Follow-up due date *",
+      "placeholder": "YYYY-MM-DD",
+      "required": true,
+      "maxLength": 10,
+      "validationKey": "followUpDate",
+      "visibleWhen": "requiresFollowUp",
+      "legacyTestID": "report_follow_up_date_input",
+      "legacyErrorTestID": "report_follow_up_date_error"
+    }
+  ]
+}

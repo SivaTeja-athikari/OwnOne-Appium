@@ -43,7 +43,15 @@ class HealingTelemetry:
 
     def __init__(self):
         self.records: List[HealingRecord] = []
-        self.report_dir = Path(os.environ.get("FARM_WORKER_ARTIFACTS", "automation/reports"))
+        # The device-farm coordinator assigns each worker/batch artifact root
+        # with FARM_ARTIFACT_ROOT. Keep the older variable as a fallback for
+        # standalone worker invocations.
+        self.report_dir = Path(
+            os.environ.get(
+                "FARM_ARTIFACT_ROOT",
+                os.environ.get("FARM_WORKER_ARTIFACTS", "automation/reports"),
+            )
+        )
 
     @classmethod
     def get_instance(cls) -> "HealingTelemetry":
@@ -93,6 +101,7 @@ class SelfHealingEngine:
         self.enabled = os.environ.get("ENABLE_SELF_HEALING", "1").lower() not in ("0", "false", "no")
         self._healed_locators: Dict[str, Tuple[str, str]] = {}
         self._healed_mock_ids: Dict[str, str] = {}
+        self._cache_hits_logged = set()
 
     @classmethod
     def get_instance(cls) -> "SelfHealingEngine":
@@ -101,7 +110,14 @@ class SelfHealingEngine:
         return cls._instance
 
     def get_cached_locator(self, test_id: str) -> Optional[Tuple[str, str]]:
-        return self._healed_locators.get(test_id)
+        locator = self._healed_locators.get(test_id)
+        if locator and test_id not in self._cache_hits_logged:
+            self._cache_hits_logged.add(test_id)
+            logger.warning(
+                "⚡ [SELF-HEAL CACHE HIT] '%s' reused %s:%s",
+                test_id, locator[0], locator[1],
+            )
+        return locator
 
     def get_cached_id(self, test_id: str) -> Optional[str]:
         return self._healed_mock_ids.get(test_id)
@@ -109,6 +125,7 @@ class SelfHealingEngine:
     def clear_cache(self) -> None:
         self._healed_locators.clear()
         self._healed_mock_ids.clear()
+        self._cache_hits_logged.clear()
 
     def heal(self, driver: Any, test_id: str, screen: str = "") -> Optional[Any]:
         if not self.enabled:

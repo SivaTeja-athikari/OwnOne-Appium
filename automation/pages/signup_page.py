@@ -1,5 +1,7 @@
 """Register a fresh device-local account through the same form a user sees."""
 from automation.pages.base_page import BasePage
+from selenium.common.exceptions import TimeoutException, WebDriverException
+from selenium.webdriver.support.ui import WebDriverWait
 
 
 class SignupPage(BasePage):
@@ -11,6 +13,23 @@ class SignupPage(BasePage):
     ERROR_BOX = 'signup_error_message'
     DRAFT_SAVED_LABEL = 'signup_draft_saved'
     LOGIN_LINK = 'signup_login_link'
+
+    def wait_for_form_ready(self, timeout=15):
+        """Confirm signup fields are present, invoking healing for changed IDs."""
+        def ready(_):
+            try:
+                for test_id in (self.NAME_INPUT, self.EMAIL_INPUT):
+                    if not self._visible(test_id):
+                        self.find_element(test_id, timeout=0)
+                return True
+            except (TimeoutException, WebDriverException):
+                return False
+
+        if timeout <= 0:
+            return ready(None)
+        return WebDriverWait(self.driver, timeout, poll_frequency=0.3).until(
+            ready, 'Signup form fields did not become ready',
+        )
 
     def _is_checked(self, test_id):
         element = self.scroll_to(test_id)
