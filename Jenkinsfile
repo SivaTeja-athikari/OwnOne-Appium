@@ -179,7 +179,7 @@ pipeline {
                     npm ci
                     python3 -m venv automation/.venv
                     automation/.venv/bin/python -m pip install -r automation/requirements.txt
-                    installed_drivers=$(./node_modules/.bin/appium driver list --installed 2>&1 || true)
+                    installed_drivers=$(sh scripts/with-env.sh ./node_modules/.bin/appium driver list --installed 2>&1 || true)
                     case "$TARGET_PLATFORM" in
                       android)
                         if ! printf '%s\n' "$installed_drivers" | grep -q 'uiautomator2@'; then
@@ -398,7 +398,7 @@ echo "$udid"
                 sh '''
                     set -eu
                     cd "$PROJECT_DIR"
-                    installed_drivers=$(./node_modules/.bin/appium driver list --installed 2>&1 || true)
+                    installed_drivers=$(sh scripts/with-env.sh ./node_modules/.bin/appium driver list --installed 2>&1 || true)
 
                     case "$TARGET_PLATFORM" in
                       android)
