@@ -377,7 +377,7 @@ echo "$udid"
                         EXPO_NO_DOTENV=1 EXPO_PUBLIC_APP_ENV="$TARGET_ENVIRONMENT" \\
                           npm run "build:e2e:ios:$TARGET_ENVIRONMENT" -- "$IOS_UDID"
                     else
-                        EXPO_NO_DOTENV=1 EXPO_PUBLIC_APP_ENV="$TARGET_ENVIRONMENT" \\
+                        sh scripts/with-env.sh env EXPO_NO_DOTENV=1 EXPO_PUBLIC_APP_ENV="$TARGET_ENVIRONMENT" \\
                           npx expo run:android --variant release --device "$ANDROID_UDID" --no-bundler
                         apk="android/app/build/outputs/apk/release/app-release.apk"
                         test -f "$apk" || { echo "Android APK not found at $apk"; exit 1; }
