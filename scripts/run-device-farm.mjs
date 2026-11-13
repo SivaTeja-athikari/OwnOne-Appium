@@ -11,13 +11,14 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const { values, positionals } = parseArgs({ allowPositionals: true, options: {
   mode: { type: 'string', default: 'shard' },
   suite: { type: 'string', default: 'regression' },
+  filter: { type: 'string', default: '' },
   'group-by': { type: 'string', default: 'module' },
   'dry-run': { type: 'boolean', default: false },
 } });
 const [platform, environment = 'qa', ...extra] = positionals;
 if (!['android', 'ios'].includes(platform) || !['development', 'qa', 'staging'].includes(environment) || extra.length
-    || !['regression', 'full', 'ios-smoke'].includes(values.suite)) {
-  throw new Error('Usage: node scripts/run-device-farm.mjs <android|ios> <development|qa|staging> [--mode shard|replicate] [--suite regression|full|ios-smoke] [--group-by module|case] [--dry-run]');
+    || !['regression', 'full', 'smoke', 'ios-smoke'].includes(values.suite)) {
+  throw new Error('Usage: node scripts/run-device-farm.mjs <android|ios> <development|qa|staging> [--mode shard|replicate] [--suite regression|full|smoke|ios-smoke] [--filter <pytest -k expression>] [--group-by module|case] [--dry-run]');
 }
 function command(executable, args, env, timeout = 30000) {
   const result = spawnSync(executable, args, { cwd: root, env, encoding: 'utf8', timeout, maxBuffer: 16 * 1024 * 1024 });
@@ -37,9 +38,12 @@ const runId = `${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID().
 const resultDir = resolve(root, 'automation/reports/farm', runId, platform, environment);
 mkdirSync(resultDir, { recursive: true });
 const write = (name, value) => writeFileSync(resolve(resultDir, name), JSON.stringify(value, null, 2));
-const common = ['-s', '-m', 'pytest', '-c', 'automation/pytest.ini', '-p', 'automation.core.farm_plugin', '-p', 'no:cacheprovider', '--platform', platform, '--environment', environment];
+const common = ['-s', '-m', 'pytest', '-c', 'automation/pytest.ini', '-p', 'automation.core.farm_plugin', '-p', 'no:cacheprovider', '--platform', platform, '--environment', environment,
+  ...(values.filter ? ['-k', values.filter] : [])];
 const selection = values.suite === 'full'
   ? ['automation/tests/offline', 'automation/tests/test_authentication.py']
+  : values.suite === 'smoke'
+    ? ['automation/legacy_company_tests/test_smoke.py', '-m', 'smoke']
   : ['automation/tests/offline', '-m', values.suite === 'ios-smoke' ? 'ios_smoke' : 'regression'];
 command(python, [...common, ...selection, '--collect-only', '-q', `--farm-collection-file=${resolve(resultDir, 'collection.json')}`], env, 60000);
 const cases = JSON.parse(readFileSync(resolve(resultDir, 'collection.json'), 'utf8'));

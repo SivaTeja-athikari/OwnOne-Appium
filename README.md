@@ -52,14 +52,49 @@ otherwise add the missing Appium settings from `.env.example` without replacing
 your current Firebase values. The E2E npm scripts
 load `.env` before starting Python; Expo reads the same file for
 `EXPO_PUBLIC_*` values. Do not put passwords, service-account JSON, or other
-private credentials in a committed file. For Jenkins, keep `.env` on the local
-agent workspace (it is git-ignored); store any secrets in Jenkins Credentials.
+private credentials in a committed file. Jenkins reads its environment file
+from the secret-file credential `appreact-env`, copies it into the checked-out
+workspace for the build, and removes it after the run.
 
 ```bash
 test -f .env || cp .env.example .env
 # Edit .env, then install the Python automation dependencies if needed:
 python3 -m pip install -r automation/requirements.txt
 ```
+
+### Remote Jenkins agents
+
+The root `Jenkinsfile` checks out the selected revision into the agent workspace
+and routes each run by platform. Set the `ANDROID_AGENT_LABEL` and
+`IOS_AGENT_LABEL` Jenkins parameters (or replace their defaults in the Jenkinsfile)
+with labels assigned to your remote nodes. The defaults are `android && mobile`
+and `macos && ios && mobile`:
+
+- Android: `android` and `mobile` (label expression `android && mobile`). Use a
+  Linux or macOS agent with Node/npm, Python 3, Java, Android SDK command-line
+  tools, `adb`, and at least one available Android emulator/device. Set
+  `ANDROID_HOME` and ensure `adb` and `emulator` are on `PATH`.
+- iOS: `macos`, `ios`, and `mobile` (label expression `macos && ios && mobile`).
+  Use a macOS agent with Node/npm, Python 3, Xcode command-line tools, and an
+  installed iOS Simulator runtime.
+
+Install Jenkins Pipeline, Git, Credentials Binding, JUnit, and HTML Publisher
+plugins. Add a **Secret file** credential with ID `appreact-env`, containing the
+agent-independent `.env` values used by the tests (Firebase client settings and
+backend/test configuration). Do not put machine-specific `IOS_UDID` or
+`ANDROID_UDID` values in this credential; choose devices with the Jenkins build
+parameters instead. Configure the Jenkins job as **Pipeline script from SCM**
+and point it at this repository and the desired branch. Each run executes
+`npm ci`, creates `automation/.venv`, installs the Python requirements and the
+Appium driver for that platform, builds the selected app environment, and
+installs it on the selected emulator/simulator before tests start. Android
+farm runs install the built APK on each selected device.
+
+Keep Android AVDs booted on the agent or enable `AUTO_BOOT_AVDS`; the runner
+needs access to the same host's Android SDK and devices. Each iOS build starts
+and uses a simulator local to its macOS Jenkins agent. Device selection,
+simulators, Android SDK, Xcode, and signing/build prerequisites must therefore
+exist on the agent that receives the job.
 
 ### Offline network testing
 

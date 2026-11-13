@@ -15,15 +15,16 @@ set -a
 . ./.env
 set +a
 
-if [ -z "${IOS_UDID:-}" ]; then
+simulator_udid=${2:-${IOS_UDID:-}}
+if [ -z "$simulator_udid" ]; then
   echo 'Set IOS_UDID to a booted iOS Simulator UDID in .env.' >&2
   exit 2
 fi
-if ! xcrun simctl list devices booted | grep -F "$IOS_UDID" >/dev/null; then
+if ! xcrun simctl list devices booted | grep -F "$simulator_udid" >/dev/null; then
   echo 'IOS_UDID is not a booted iOS Simulator; refusing to target a physical device.' >&2
   exit 2
 fi
 
 # The shell already exported .env; avoid parsing it a second time.
 EXPO_NO_DOTENV=1 EXPO_PUBLIC_APP_ENV="$target_environment" npx expo run:ios \
-  --configuration Release --device "$IOS_UDID"
+  --configuration Release --device "$simulator_udid"

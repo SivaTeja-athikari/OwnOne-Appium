@@ -24,6 +24,7 @@ from automation.core.locator_catalog import LocatorCatalog, SemanticDescriptor
 
 logger = logging.getLogger("automation.healer")
 CONFIDENCE_THRESHOLD = 0.82
+CONFIDENCE_MARGIN = 0.10
 
 
 @dataclass
@@ -152,36 +153,46 @@ class SelfHealingEngine:
         descriptor = LocatorCatalog.get(test_id)
         candidates = list(driver.elements.items())
 
-        # Check catalog texts first
+        # Check catalog text first, but never accept the first of multiple
+        # controls with the same label.
         if descriptor:
+            semantic_matches = {}
             for text in descriptor.texts:
                 for k, elem in candidates:
-                    if elem.text.strip().lower() == text.strip().lower():
-                        self._healed_mock_ids[test_id] = k
-                        self.telemetry.record(HealingRecord(
-                            test_id=test_id,
-                            strategy="mock_fallback",
-                            healed_query=f"mock:text('{text}')",
-                            confidence=0.95,
-                            screen=screen,
-                            element_attributes={"key": k, "tag": elem.tag, "text": elem.text},
-                        ))
-                        return elem
+                    if (elem.text.strip().lower() == text.strip().lower()
+                            and self._matches_mock_role(elem, descriptor.role)):
+                        semantic_matches[k] = (elem, text)
+            if len(semantic_matches) == 1:
+                k, (elem, text) = next(iter(semantic_matches.items()))
+                self._healed_mock_ids[test_id] = k
+                self.telemetry.record(HealingRecord(
+                    test_id=test_id,
+                    strategy="mock_fallback",
+                    healed_query=f"mock:text('{text}')",
+                    confidence=0.95,
+                    screen=screen,
+                    element_attributes={"key": k, "tag": elem.tag, "text": elem.text},
+                ))
+                return elem
+            if len(semantic_matches) > 1:
+                logger.warning("Rejected ambiguous mock semantic heal for %s", test_id)
+                return None
 
         # Fuzzy match on element IDs (guard against collision with other known catalog IDs)
-        best_elem = None
-        best_score = 0.0
-        best_key = ""
+        ranked = []
         for k, elem in candidates:
             if k in LocatorCatalog._lookup and k != test_id:
                 continue
+            if descriptor and not self._matches_mock_role(elem, descriptor.role):
+                continue
             score = difflib.SequenceMatcher(None, test_id.lower(), k.lower()).ratio()
-            if score > best_score:
-                best_score = score
-                best_elem = elem
-                best_key = k
+            ranked.append((score, k, elem))
+        ranked.sort(key=lambda candidate: candidate[0], reverse=True)
+        best_score, best_key, best_elem = ranked[0] if ranked else (0.0, "", None)
+        runner_score = ranked[1][0] if len(ranked) > 1 else None
 
-        if best_elem and best_score >= CONFIDENCE_THRESHOLD:
+        if (best_elem and best_score >= CONFIDENCE_THRESHOLD
+                and (runner_score is None or best_score - runner_score >= CONFIDENCE_MARGIN)):
             self._healed_mock_ids[test_id] = best_key
             self.telemetry.record(HealingRecord(
                 test_id=test_id,
@@ -192,8 +203,28 @@ class SelfHealingEngine:
                 element_attributes={"key": best_key, "tag": best_elem.tag, "text": best_elem.text},
             ))
             return best_elem
+        if best_elem and runner_score is not None and best_score - runner_score < CONFIDENCE_MARGIN:
+            logger.warning("Rejected ambiguous mock ID heal for %s: top scores %.2f and %.2f",
+                           test_id, best_score, runner_score)
 
         return None
+
+    @staticmethod
+    def _matches_mock_role(elem: Any, role: str) -> bool:
+        tag = str(getattr(elem, "tag", "")).lower()
+        allowed = {
+            "input": {"input", "edittext", "textfield", "securetextfield"},
+            "button": {"button"},
+            "link": {"link", "button"},
+            "tab": {"tab", "button"},
+            "switch": {"switch"},
+            "checkbox": {"checkbox"},
+            "radio": {"radio"},
+            "alert": {"alert", "text", "label"},
+            "text": {"text", "label"},
+            "card": {"card", "view", "group"},
+        }
+        return not tag or tag in allowed.get(role, {tag})
 
     def _try_catalog_resolution(
         self, driver: Any, requested_id: str, descriptor: SemanticDescriptor, platform: str, screen: str
@@ -250,28 +281,66 @@ class SelfHealingEngine:
                 xpath = f'//*[@name="{neighbor}" or @label="{neighbor}"]/following::XCUIElementTypeTextField[1]'
                 queries.append((By.XPATH, xpath, 0.85))
 
+        candidates: Dict[str, Tuple[Any, float, str, str]] = {}
         for by_strategy, query_val, confidence in queries:
             try:
                 elements = driver.find_elements(by_strategy, query_val)
                 for elem in elements:
                     try:
-                        if elem.is_displayed():
-                            self._healed_locators[requested_id] = (by_strategy, query_val)
-                            self.telemetry.record(HealingRecord(
-                                test_id=requested_id,
-                                strategy="catalog_semantic",
-                                healed_query=f"{by_strategy}:{query_val}",
-                                confidence=confidence,
-                                screen=screen,
-                                element_attributes={"strategy": by_strategy, "query": query_val, "canonical_id": descriptor.test_id},
-                            ))
-                            return elem
+                        if not elem.is_displayed() or not self._matches_catalog_role(elem, descriptor, platform):
+                            continue
+                        identity = str(getattr(elem, "id", "") or id(elem))
+                        previous = candidates.get(identity)
+                        if previous is None or confidence > previous[1]:
+                            candidates[identity] = (elem, confidence, by_strategy, query_val)
                     except WebDriverException:
                         continue
             except WebDriverException:
                 continue
 
-        return None
+        ranked = sorted(candidates.values(), key=lambda candidate: candidate[1], reverse=True)
+        if not ranked:
+            return None
+        best = ranked[0]
+        runner_up = ranked[1] if len(ranked) > 1 else None
+        if best[1] < CONFIDENCE_THRESHOLD:
+            return None
+        if runner_up and best[1] - runner_up[1] < CONFIDENCE_MARGIN:
+            logger.warning(
+                "Rejected ambiguous catalog heal for %s: top scores %.2f and %.2f",
+                requested_id, best[1], runner_up[1],
+            )
+            return None
+
+        elem, confidence, by_strategy, query_val = best
+        self._healed_locators[requested_id] = (by_strategy, query_val)
+        self.telemetry.record(HealingRecord(
+            test_id=requested_id,
+            strategy="catalog_semantic",
+            healed_query=f"{by_strategy}:{query_val}",
+            confidence=confidence,
+            screen=screen,
+            element_attributes={
+                "strategy": by_strategy,
+                "query": query_val,
+                "canonical_id": descriptor.test_id,
+                "candidate_count": len(ranked),
+                "runner_up_confidence": runner_up[1] if runner_up else None,
+            },
+        ))
+        return elem
+
+    @staticmethod
+    def _matches_catalog_role(elem: Any, descriptor: SemanticDescriptor, platform: str) -> bool:
+        """Reject semantic text matches on the wrong native control class."""
+        expected = descriptor.android_classes if platform == "android" else descriptor.ios_classes
+        if not expected:
+            return True
+        try:
+            actual = str(elem.tag_name).strip().lower()
+        except WebDriverException:
+            return False
+        return actual in {name.strip().lower() for name in expected}
 
     def _try_xml_heuristic_resolution(
         self, driver: Any, test_id: str, descriptor: Optional[SemanticDescriptor], platform: str, screen: str
@@ -286,9 +355,7 @@ class SelfHealingEngine:
             logger.debug("Failed to parse page source for healing: %s", exc)
             return None
 
-        best_score = 0.0
-        best_candidate: Optional[ET.Element] = None
-        best_xpath = ""
+        ranked_candidates: List[Tuple[float, ET.Element, str]] = []
 
         # Walk all elements and calculate composite score
         for node in root.iter():
@@ -303,15 +370,12 @@ class SelfHealingEngine:
             if bare_id and bare_id in LocatorCatalog._lookup and bare_id != test_id:
                 continue
 
-            # Match target role if known
+            # Match the declared native role exactly when the catalog has a
+            # platform class contract. This avoids healing a button to its
+            # label TextView or to another unrelated control.
             if descriptor:
-                if descriptor.role == "input" and not any(k in tag for k in ("edittext", "textfield", "input")):
-                    continue
-                if descriptor.role == "button" and not any(k in tag for k in ("button", "viewgroup", "pressable", "text")):
-                    continue
-                if descriptor.role == "card" and not any(k in tag for k in ("viewgroup", "layout", "view", "other")):
-                    continue
-                if descriptor.role in ("alert", "text") and any(k in tag for k in ("edittext", "textfield", "input", "button")):
+                expected_classes = descriptor.android_classes if platform == "android" else descriptor.ios_classes
+                if expected_classes and tag not in {name.lower() for name in expected_classes}:
                     continue
 
             # 1. Identifier similarity (resource-id / name / content-desc)
@@ -337,14 +401,19 @@ class SelfHealingEngine:
 
             # Weighted composite score
             composite = max(id_score * 0.9, text_score * 0.95, hint_score * 0.9)
-            if composite > best_score:
-                xpath = self._construct_node_xpath(node, platform)
-                if xpath:
-                    best_score = composite
-                    best_candidate = node
-                    best_xpath = xpath
+            xpath = self._construct_node_xpath(node, platform)
+            if xpath:
+                ranked_candidates.append((composite, node, xpath))
 
-        if best_candidate is not None and best_score >= CONFIDENCE_THRESHOLD and best_xpath:
+        ranked_candidates.sort(key=lambda candidate: candidate[0], reverse=True)
+        if ranked_candidates:
+            best_score, best_candidate, best_xpath = ranked_candidates[0]
+            runner_score = ranked_candidates[1][0] if len(ranked_candidates) > 1 else None
+        else:
+            best_score, best_candidate, best_xpath, runner_score = 0.0, None, "", None
+
+        if (best_candidate is not None and best_score >= CONFIDENCE_THRESHOLD and best_xpath
+                and (runner_score is None or best_score - runner_score >= CONFIDENCE_MARGIN)):
             try:
                 elements = driver.find_elements(By.XPATH, best_xpath)
                 for elem in elements:
@@ -356,11 +425,19 @@ class SelfHealingEngine:
                             healed_query=f"xpath:{best_xpath}",
                             confidence=round(best_score, 2),
                             screen=screen,
-                            element_attributes=dict(best_candidate.attrib),
+                            element_attributes={
+                                **dict(best_candidate.attrib),
+                                "runner_up_confidence": round(runner_score, 2) if runner_score is not None else None,
+                            },
                         ))
                         return elem
             except WebDriverException:
                 pass
+        elif best_candidate is not None and runner_score is not None and best_score - runner_score < CONFIDENCE_MARGIN:
+            logger.warning(
+                "Rejected ambiguous XML heal for %s: top scores %.2f and %.2f",
+                test_id, best_score, runner_score,
+            )
 
         return None
 

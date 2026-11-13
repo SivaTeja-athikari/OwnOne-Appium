@@ -202,7 +202,13 @@ class TestXmlTreeHeuristicResolution:
         healed = healer.heal(driver, "login_submit_btn", screen="LoginPage")
         assert healed is not None
         assert len(telemetry.records) == 1
-        assert "Sign in" in telemetry.records[0].healed_query
+        record = telemetry.records[0]
+        # The actionable XPath is built from the renamed accessibility name;
+        # the visible label is retained as candidate metadata.
+        assert record.strategy == "heuristic_xml_tree"
+        assert '[@name="refactored_submit_action"]' in record.healed_query
+        assert record.element_attributes["label"] == "Sign in"
+        assert record.confidence >= 0.8
 
     def test_candidate_collision_guard_prevents_stealing_sibling_identity(self, tmp_path):
         """Ensure a visible sibling input (signup_name_input) does NOT falsely heal signup_confirm_input."""

@@ -1,10 +1,7 @@
 pipeline {
-    agent {
-        node {
-            label 'built-in'
-            customWorkspace '/Users/sivateja/Documents/OwnOne/AppReact'
-        }
-    }
+    // Replace these label defaults with the labels configured on your remote nodes.
+    // iOS simulator/Appium runs require a macOS agent.
+    agent { label "${params.PLATFORM == 'ios' ? params.IOS_AGENT_LABEL : params.ANDROID_AGENT_LABEL}" }
 
     parameters {
         // ---------- WHAT to run ----------
@@ -12,6 +9,16 @@ pipeline {
             name: 'PLATFORM',
             choices: ['android', 'ios'],
             description: 'Mobile platform to test.'
+        )
+        string(
+            name: 'ANDROID_AGENT_LABEL',
+            defaultValue: 'android && mobile',
+            description: 'Jenkins label expression for the remote Android agent. Replace with your node labels.'
+        )
+        string(
+            name: 'IOS_AGENT_LABEL',
+            defaultValue: 'macos && ios && mobile',
+            description: 'Jenkins label expression for the remote macOS iOS agent. Replace with your node labels.'
         )
         choice(
             name: 'TARGET_ENVIRONMENT',
@@ -26,7 +33,7 @@ pipeline {
         string(
             name: 'TEST_FILTER',
             defaultValue: '',
-            description: 'Optional tag / name filter (e.g. @login). Exported as TEST_FILTER; your runner must read it.'
+            description: 'Optional pytest -k expression applied in single and farm mode (e.g. test_signup or schema_form).'
         )
 
         // ---------- WHERE to run ----------
@@ -105,17 +112,14 @@ pipeline {
 
     options {
         timestamps()
-        skipDefaultCheckout(true)   // project lives on local disk; do not let SCM checkout wipe .env
+        skipDefaultCheckout(false)  // Checkout source into this agent's workspace.
         disableConcurrentBuilds()
         buildDiscarder(logRotator(numToKeepStr: '15', artifactNumToKeepStr: '10'))
         timeout(time: 90, unit: 'MINUTES')   // global safety net; stage-level timeout comes from TEST_TIMEOUT_MIN
     }
 
     environment {
-        PROJECT_DIR      = '/Users/sivateja/Documents/OwnOne/AppReact'
-        ANDROID_HOME     = '/Users/sivateja/Library/Android/sdk'
-        ANDROID_SDK_ROOT = '/Users/sivateja/Library/Android/sdk'
-        PATH = "/usr/local/bin:/opt/homebrew/bin:${PROJECT_DIR}/automation/.venv/bin:/Library/Frameworks/Python.framework/Versions/3.14/bin:/Users/sivateja/Library/Android/sdk/platform-tools:/Users/sivateja/Library/Android/sdk/emulator:${env.PATH}"
+        PROJECT_DIR = "${env.WORKSPACE}"
     }
 
     stages {
@@ -166,12 +170,19 @@ pipeline {
                     echo "  Static Checks:       ${params.RUN_STATIC_CHECKS}"
                     echo "============================================================"
                 }
+                withCredentials([file(credentialsId: 'appreact-env', variable: 'APP_ENV_FILE')]) {
                 sh '''
                     set -eu
                     cd "$PROJECT_DIR"
-                    test -f .env || { echo 'Missing .env file. Copy from .env.example before running.'; exit 1; }
-                    test -x node_modules/.bin/appium || { echo 'Missing local Appium installation. Run npm install.'; exit 1; }
-                    test -f automation/.venv/bin/python || { echo 'Missing Python virtualenv at automation/.venv.'; exit 1; }
+                    cp "$APP_ENV_FILE" .env
+                    test -n "${ANDROID_HOME:-}" || { [ "$TARGET_PLATFORM" = ios ] || { echo 'ANDROID_HOME must be configured on Android agents.'; exit 1; }; }
+                    npm ci
+                    python3 -m venv automation/.venv
+                    automation/.venv/bin/python -m pip install -r automation/requirements.txt
+                    case "$TARGET_PLATFORM" in
+                      android) npm run appium:driver:android ;;
+                      ios) npm run appium:driver:ios ;;
+                    esac
 
                     mkdir -p automation/reports
                     if [ "${CLEAN_OLD_REPORTS:-true}" = "true" ]; then
@@ -185,6 +196,7 @@ pipeline {
                     echo "  NPM:    $(npm --version)"
                     echo "  Python: $(automation/.venv/bin/python --version)"
                 '''
+                }
             }
         }
 
@@ -292,6 +304,8 @@ echo "$entries"
                         }
                         env.RUN_MODE = mode
                         env.ANDROID_UDID = devices[0].split('\\|')[0]
+                        env.FARM_ANDROID_UDID = env.ANDROID_UDID
+                        env.DEVICE_IDS_RESOLVED = devices.collect { it.split('\\|')[0] }.join(',')
                         if (mode == 'farm') {
                             env.ANDROID_FARM_DEVICES = out
                             env.GROUP_BY = (params.GROUP_BY ?: 'case').trim()
@@ -328,6 +342,7 @@ echo "$udid"
 ''').trim().readLines().last()
 
                         env.IOS_UDID = udid
+                        env.FARM_IOS_UDID = udid
                         env.RUN_MODE = 'single'
                         if (params.RUN_MODE == 'farm') {
                             echo "WARNING: farm mode is not supported on iOS here. Running in single mode."
@@ -336,6 +351,31 @@ echo "$udid"
                         echo "Resolved: iOS simulator ${udid}"
                     }
                 }
+            }
+        }
+
+        // ------------------------------------------------------------------
+        stage('Build & Install App') {
+            steps {
+                sh '''
+                    set -eu
+                    cd "$PROJECT_DIR"
+                    if [ "$TARGET_PLATFORM" = ios ]; then
+                        EXPO_NO_DOTENV=1 EXPO_PUBLIC_APP_ENV="$TARGET_ENVIRONMENT" \\
+                          npm run "build:e2e:ios:$TARGET_ENVIRONMENT" -- "$IOS_UDID"
+                    else
+                        EXPO_NO_DOTENV=1 EXPO_PUBLIC_APP_ENV="$TARGET_ENVIRONMENT" \\
+                          npx expo run:android --variant release --device "$ANDROID_UDID"
+                        apk="android/app/build/outputs/apk/release/app-release.apk"
+                        test -f "$apk" || { echo "Android APK not found at $apk"; exit 1; }
+                        old_ifs="$IFS"; IFS=,
+                        for serial in $DEVICE_IDS_RESOLVED; do
+                            [ "$serial" = "$ANDROID_UDID" ] && continue
+                            adb -s "$serial" install -r "$apk"
+                        done
+                        IFS="$old_ifs"
+                    fi
+                '''
             }
         }
 
@@ -395,15 +435,26 @@ echo "$udid"
 
                             rm -rf automation/reports/current-run
                             mkdir -p automation/reports/current-run
+                            test_filter="${TEST_FILTER:-}"
+                            if [ -n "$test_filter" ]; then
+                                echo "   Test Filter: $test_filter"
+                            else
+                                echo "   Test Filter: (none)"
+                            fi
 
                             if [ "$RUN_MODE" = "farm" ]; then
+                                farm_suite="$TEST_SUITE"
+                                if [ "$farm_suite" = "smoke" ] && [ "$TARGET_PLATFORM" = "ios" ]; then
+                                    farm_suite="ios-smoke"
+                                fi
                                 echo "============================================================"
                                 echo "Executing Farm ($FARM_SCHEDULING_MODE): $TARGET_PLATFORM / $TARGET_ENVIRONMENT / $TEST_SUITE"
                                 echo "   Device Pool: $ANDROID_FARM_DEVICES"
                                 echo "   Scheduling:  --mode ${FARM_SCHEDULING_MODE:-shard}"
                                 echo "============================================================"
                                 node scripts/run-device-farm.mjs "$TARGET_PLATFORM" "$TARGET_ENVIRONMENT" \
-                                    --mode "${FARM_SCHEDULING_MODE:-shard}"
+                                    --mode "${FARM_SCHEDULING_MODE:-shard}" \
+                                    --suite "$farm_suite" --filter "$test_filter"
 
                                 latest_farm_dir=$(ls -td automation/reports/farm/*/ 2>/dev/null | head -1)
                                 if [ -n "$latest_farm_dir" ] && [ -d "$latest_farm_dir" ]; then
@@ -425,7 +476,11 @@ echo "$udid"
                                     node -e "Object.keys(require('./package.json').scripts||{}).filter(s=>s.startsWith('test:reports:')).forEach(s=>console.log('  '+s))"
                                     exit 2
                                 fi
-                                npm run "$suite"
+                                if [ -n "$test_filter" ]; then
+                                    npm run "$suite" -- -k "$test_filter"
+                                else
+                                    npm run "$suite"
+                                fi
                                 cp automation/reports/junit-*.xml automation/reports/current-run/ 2>/dev/null || true
                             fi
                         '''
@@ -473,9 +528,10 @@ echo "$udid"
                 else
                     echo "No Allure result files were produced for this build."
                 fi
+                rm -f .env
             '''
             script {
-                dir(env.PROJECT_DIR) {
+                dir(env.WORKSPACE) {
                     junit testResults: 'automation/reports/current-run/*.xml', allowEmptyResults: true
                     archiveArtifacts artifacts: 'automation/reports/healed_locators.json,automation/reports/farm/**,automation/reports/current-run/**,automation/reports/*.xml,automation/reports/allure-results/**,automation/reports/jenkins-appium.log', allowEmptyArchive: true
                     publishHTML(target: [

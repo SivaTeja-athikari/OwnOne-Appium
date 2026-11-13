@@ -1,13 +1,12 @@
 """Real-device smoke checks for schema-defined client fields."""
 import pytest
-from selenium.webdriver.support.ui import WebDriverWait
 
 from automation.pages.reports_page import ReportsPage
 from automation.pages.schema_form_page import SchemaFormPage
 from automation.offline.server_evidence import assert_submission_rules, server_document
 
 
-pytestmark = [pytest.mark.offline, pytest.mark.schema_form]
+pytestmark = [pytest.mark.regression, pytest.mark.schema_form]
 
 
 def test_added_schema_field_is_submitted_under_published_firestore_rules(
