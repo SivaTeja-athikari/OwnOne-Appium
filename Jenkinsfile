@@ -182,14 +182,14 @@ pipeline {
                     installed_drivers=$(./node_modules/.bin/appium driver list --installed 2>&1 || true)
                     case "$TARGET_PLATFORM" in
                       android)
-                        if ! printf '%s\\n' "$installed_drivers" | grep -q 'uiautomator2@'; then
+                        if ! printf '%s\n' "$installed_drivers" | grep -q 'uiautomator2@'; then
                             npm run appium:driver:android
                         else
                             echo 'Appium uiautomator2 driver is already installed; keeping it.'
                         fi
                         ;;
                       ios)
-                        if ! printf '%s\\n' "$installed_drivers" | grep -q 'xcuitest@'; then
+                        if ! printf '%s\n' "$installed_drivers" | grep -q 'xcuitest@'; then
                             npm run appium:driver:ios
                         else
                             echo 'Appium xcuitest driver is already installed; keeping it.'
@@ -402,12 +402,12 @@ echo "$udid"
 
                     case "$TARGET_PLATFORM" in
                       android)
-                        printf '%s\\n' "$installed_drivers" | grep -q 'uiautomator2@' || {
+                        printf '%s\n' "$installed_drivers" | grep -q 'uiautomator2@' || {
                           echo 'Appium uiautomator2 driver is missing. Run npm run appium:driver:android'; exit 2;
                         }
                         ;;
                       ios)
-                        printf '%s\\n' "$installed_drivers" | grep -q 'xcuitest@' || {
+                        printf '%s\n' "$installed_drivers" | grep -q 'xcuitest@' || {
                           echo 'Appium xcuitest driver is missing. Run npm run appium:driver:ios'; exit 2;
                         }
                         ;;
