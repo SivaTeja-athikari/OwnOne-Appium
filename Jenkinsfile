@@ -416,7 +416,7 @@ echo "$udid"
                     # Appium with session_discovery enabled for the multi-worker farm coordinator
                     if ! curl -fsS http://127.0.0.1:4723/status >/dev/null 2>&1; then
                         echo "Starting Appium server on 127.0.0.1:4723 (session_discovery enabled)..."
-                        ./node_modules/.bin/appium --address 127.0.0.1 --port 4723 --allow-insecure='*:session_discovery' \
+                        sh scripts/with-env.sh ./node_modules/.bin/appium --address 127.0.0.1 --port 4723 --allow-insecure='*:session_discovery' \
                             > automation/reports/jenkins-appium.log 2>&1 &
                         ready=0
                         for attempt in $(seq 1 30); do
