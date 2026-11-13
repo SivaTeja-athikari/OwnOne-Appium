@@ -179,9 +179,22 @@ pipeline {
                     npm ci
                     python3 -m venv automation/.venv
                     automation/.venv/bin/python -m pip install -r automation/requirements.txt
+                    installed_drivers=$(./node_modules/.bin/appium driver list --installed 2>&1 || true)
                     case "$TARGET_PLATFORM" in
-                      android) npm run appium:driver:android ;;
-                      ios) npm run appium:driver:ios ;;
+                      android)
+                        if ! printf '%s\\n' "$installed_drivers" | grep -q 'uiautomator2@'; then
+                            npm run appium:driver:android
+                        else
+                            echo 'Appium uiautomator2 driver is already installed; keeping it.'
+                        fi
+                        ;;
+                      ios)
+                        if ! printf '%s\\n' "$installed_drivers" | grep -q 'xcuitest@'; then
+                            npm run appium:driver:ios
+                        else
+                            echo 'Appium xcuitest driver is already installed; keeping it.'
+                        fi
+                        ;;
                     esac
 
                     mkdir -p automation/reports
